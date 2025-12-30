@@ -18,10 +18,10 @@ S3_PREFIX = ""
 
 DATE_START = ""
 DATE_END = ""
-TEST_MODE = False
+TEST_MODE = True
 
 MEDIA_TYPE = "any"
-PAGE_SIZE = 25
+PAGE_SIZE = 100
 MAX_TOTAL_RESULTS = 1000
 
 SEARCH_URL = f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/transcripts/search"
