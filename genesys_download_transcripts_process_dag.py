@@ -93,7 +93,7 @@ def _fetch_total_for_range(
         "Content-Type": "application/json",
     }
     payload = {
-        "pageSize": 1,
+        "pageSize": PAGE_SIZE,
         "pageNumber": 1,
         "types": ["transcripts"],
         "returnFields": ["conversationId", "communicationId", "mediaType"],
@@ -107,6 +107,8 @@ def _fetch_total_for_range(
             }
         ],
     }
+    print(f"Payload for balance in Genesys Cloud")
+    print(payload)
     response = requests.post(SEARCH_URL, headers=headers, json=payload)
     if response.status_code == 429:
         retry = int(response.headers.get("Retry-After", "1"))
@@ -117,6 +119,8 @@ def _fetch_total_for_range(
         response = requests.post(SEARCH_URL, headers=headers, json=payload)
     response.raise_for_status()
     data = response.json() or {}
+    print(f"Total regs {int(data.get("total", 0))}", )
+    
     return int(data.get("total", 0))
 
 
