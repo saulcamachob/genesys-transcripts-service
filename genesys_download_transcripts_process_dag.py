@@ -147,6 +147,16 @@ def _fetch_total_for_range(
 
 def build_balanced_date_ranges(**context) -> list[dict]:
     date_range = context["ti"].xcom_pull(task_ids="init.resolve_date_range")
+    if _normalize_bool((date_range or {}).get("test_mode", TEST_MODE)):
+        start_dt = _parse_datetime(date_range["date_start"])
+        end_dt = _parse_datetime(date_range["date_end"])
+        return [
+            {
+                "date_start": _format_query_dt(start_dt),
+                "date_end": _format_query_dt(end_dt),
+                "total": None,
+            }
+        ]
     token = context["ti"].xcom_pull(task_ids="01_auth.fetch_token")
 
     start_dt = _parse_datetime(date_range["date_start"])
