@@ -8,20 +8,17 @@ from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.task_group import TaskGroup
 
-GENESYS_CLIENT_ID = os.getenv("GENESYS_CLIENT_ID")
-GENESYS_CLIENT_SECRET = os.getenv("GENESYS_CLIENT_SECRET")
-GENESYS_REGION = os.getenv("GENESYS_REGION", "mypurecloud.com")
+GENESYS_CLIENT_ID = "11a6f722-b9ef-48f2-9531-d1f3b4d57db3"
+GENESYS_CLIENT_SECRET = "u8AWwoM78AvdMypBvLLmaiTVeR4R2ZPo7Z6hTcd7uFo"
+GENESYS_REGION = "mypurecloud.com"
 
-OUTPUT_DIR = os.getenv("OUTPUT_DIR", "./output")
-S3_BUCKET = os.getenv("S3_BUCKET", "report360-datalake-prodution")
-S3_PREFIX = os.getenv("S3_PREFIX", "")
+OUTPUT_DIR = "./"
+S3_BUCKET = "report360-datalake-prodution"
+S3_PREFIX = ""
 
-DATE_START = os.getenv("DATE_START")
-DATE_END = os.getenv("DATE_END")
-
-MEDIA_TYPE = os.getenv("MEDIA_TYPE", "any")
-PAGE_SIZE = int(os.getenv("PAGE_SIZE", "25"))
-MAX_TOTAL_RESULTS = int(os.getenv("MAX_TOTAL_RESULTS", "1000"))
+MEDIA_TYPE = "any"
+PAGE_SIZE = 25
+MAX_TOTAL_RESULTS = 1000
 
 SEARCH_URL = f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/transcripts/search"
 
