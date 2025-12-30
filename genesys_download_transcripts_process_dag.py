@@ -5,6 +5,7 @@ import pendulum
 import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.task_group import TaskGroup
 
 GENESYS_CLIENT_ID = os.getenv("GENESYS_CLIENT_ID")
@@ -12,6 +13,8 @@ GENESYS_CLIENT_SECRET = os.getenv("GENESYS_CLIENT_SECRET")
 GENESYS_REGION = os.getenv("GENESYS_REGION", "mypurecloud.com")
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "./output")
+S3_BUCKET = os.getenv("S3_BUCKET", "report360-datalake-prodution")
+S3_PREFIX = os.getenv("S3_PREFIX", "")
 
 DATE_START = os.getenv("DATE_START")
 DATE_END = os.getenv("DATE_END")
@@ -151,6 +154,7 @@ def download_transcripts(**context) -> dict:
     )
     count_found = 0
     count_saved = 0
+    saved_files = []
     for item in transcripts or []:
         count_found += 1
         conv_id = item["conversation_id"]
@@ -167,8 +171,47 @@ def download_transcripts(**context) -> dict:
         with open(dest_path, "wb") as file_handle:
             file_handle.write(response.content)
         count_saved += 1
+        saved_files.append(dest_path)
 
-    return {"found": count_found, "saved": count_saved, "output_dir": OUTPUT_DIR}
+    return {
+        "found": count_found,
+        "saved": count_saved,
+        "output_dir": OUTPUT_DIR,
+        "saved_files": saved_files,
+    }
+
+
+def upload_transcripts_to_s3(**context) -> dict:
+    payload = context["ti"].xcom_pull(
+        task_ids="03_get_url_transcripts.download_transcripts"
+    )
+    saved_files = (payload or {}).get("saved_files", [])
+    hook = S3Hook(aws_conn_id="aws_default")
+
+    prefix = S3_PREFIX.strip("/")
+    uploaded = 0
+    for file_path in saved_files:
+        filename = os.path.basename(file_path)
+        name, _extension = os.path.splitext(filename)
+        parts = name.split("__")
+        if len(parts) >= 2:
+            conv_id = parts[0]
+            comm_id = parts[1]
+            base_key = f"{conv_id}/{comm_id}/{filename}"
+        else:
+            base_key = filename
+
+        key = f"{prefix}/{base_key}" if prefix else base_key
+        hook.load_file(
+            filename=file_path,
+            key=key,
+            bucket_name=S3_BUCKET,
+            replace=True,
+        )
+        os.remove(file_path)
+        uploaded += 1
+
+    return {"uploaded": uploaded, "bucket": S3_BUCKET, "prefix": prefix}
 
 
 default_args = {
@@ -220,7 +263,11 @@ with DAG(
             task_id="download_transcripts",
             python_callable=download_transcripts,
         )
+        upload_transcripts_task = PythonOperator(
+            task_id="upload_transcripts",
+            python_callable=upload_transcripts_to_s3,
+        )
 
-        resolve_urls_task >> download_transcripts_task
+        resolve_urls_task >> download_transcripts_task >> upload_transcripts_task
 
     init_group >> auth_group >> search_group >> download_group
