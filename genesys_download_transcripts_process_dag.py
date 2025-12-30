@@ -357,7 +357,15 @@ def upload_transcripts_to_s3(**context) -> dict:
 
     prefix = S3_PREFIX.strip("/")
     uploaded = 0
+    skipped_missing = 0
     for file_path in saved_files:
+        if not os.path.exists(file_path):
+            print(
+                "⚠️ Archivo no encontrado para carga en S3. Se omite y continúa: "
+                f"{file_path}"
+            )
+            skipped_missing += 1
+            continue
         filename = os.path.basename(file_path)
         name, _extension = os.path.splitext(filename)
         parts = name.split("__")
@@ -378,7 +386,12 @@ def upload_transcripts_to_s3(**context) -> dict:
         os.remove(file_path)
         uploaded += 1
 
-    return {"uploaded": uploaded, "bucket": S3_BUCKET, "prefix": prefix}
+    return {
+        "uploaded": uploaded,
+        "skipped_missing": skipped_missing,
+        "bucket": S3_BUCKET,
+        "prefix": prefix,
+    }
 
 
 default_args = {
