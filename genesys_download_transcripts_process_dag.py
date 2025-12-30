@@ -367,16 +367,7 @@ def upload_transcripts_to_s3(**context) -> dict:
             skipped_missing += 1
             continue
         filename = os.path.basename(file_path)
-        name, _extension = os.path.splitext(filename)
-        parts = name.split("__")
-        if len(parts) >= 2:
-            conv_id = parts[0]
-            comm_id = parts[1]
-            base_key = f"{conv_id}/{comm_id}/{filename}"
-        else:
-            base_key = filename
-
-        key = f"{prefix}/{base_key}" if prefix else base_key
+        key = f"{prefix}/{filename}" if prefix else filename
         hook.load_file(
             filename=file_path,
             key=key,
