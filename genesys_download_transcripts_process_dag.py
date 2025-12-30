@@ -16,6 +16,9 @@ OUTPUT_DIR = "./"
 S3_BUCKET = "report360-datalake-prodution"
 S3_PREFIX = ""
 
+DATE_START = ""
+DATE_END = ""
+
 MEDIA_TYPE = "any"
 PAGE_SIZE = 25
 MAX_TOTAL_RESULTS = 1000
