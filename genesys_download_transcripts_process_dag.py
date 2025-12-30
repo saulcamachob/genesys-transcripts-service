@@ -8,8 +8,8 @@ from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.task_group import TaskGroup
 
-GENESYS_CLIENT_ID = "11a6f722-b9ef-48f2-9531-d1f3b4d57db3"
-GENESYS_CLIENT_SECRET = "u8AWwoM78AvdMypBvLLmaiTVeR4R2ZPo7Z6hTcd7uFo"
+GENESYS_CLIENT_ID = "d2c69c59-c404-41b3-8da2-578934976898"
+GENESYS_CLIENT_SECRET = "82ZD784Ipuh2d_O7KJrlQzxfSLEUZ_WEgzornvnPBHI"
 GENESYS_REGION = "mypurecloud.com"
 
 OUTPUT_DIR = "/opt/airflow/dags/llcr/data/"
