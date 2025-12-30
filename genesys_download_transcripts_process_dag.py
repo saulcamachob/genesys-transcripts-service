@@ -12,7 +12,7 @@ GENESYS_CLIENT_ID = "11a6f722-b9ef-48f2-9531-d1f3b4d57db3"
 GENESYS_CLIENT_SECRET = "u8AWwoM78AvdMypBvLLmaiTVeR4R2ZPo7Z6hTcd7uFo"
 GENESYS_REGION = "mypurecloud.com"
 
-OUTPUT_DIR = "./"
+OUTPUT_DIR = "/opt/airflow/dags/llcr/data/"
 S3_BUCKET = "report360-datalake-prodution"
 S3_PREFIX = ""
 
