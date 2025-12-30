@@ -38,18 +38,41 @@ def _parse_datetime(value: str) -> pendulum.DateTime:
     return pendulum.parse(value, tz="UTC")
 
 
-def resolve_date_range() -> dict:
-    if not DATE_START and not DATE_END:
-        today_start = pendulum.now("UTC").start_of("day")
-        yesterday_start = today_start.subtract(days=1)
-        date_start = _format_iso(yesterday_start)
-        date_end = _format_iso(today_start)
-        return {"date_start": date_start, "date_end": date_end}
+def _normalize_input_date(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, pendulum.DateTime):
+        return _format_iso(value)
+    if isinstance(value, str) and not value.strip():
+        return None
+    return str(value)
 
-    if not DATE_START or not DATE_END:
-        raise ValueError("DATE_START y DATE_END deben suministrarse juntos en .env")
 
-    return {"date_start": DATE_START, "date_end": DATE_END}
+def _default_date_range() -> dict:
+    today_start = pendulum.now("UTC").start_of("day")
+    yesterday_start = today_start.subtract(days=1)
+    return {
+        "date_start": _format_iso(yesterday_start),
+        "date_end": _format_iso(today_start),
+    }
+
+
+def resolve_date_range(**context) -> dict:
+    dag_run = context.get("dag_run")
+    conf = (dag_run.conf or {}) if dag_run else {}
+
+    input_start = _normalize_input_date(
+        conf.get("DATE_START") or conf.get("date_start") or DATE_START
+    )
+    input_end = _normalize_input_date(
+        conf.get("DATE_END") or conf.get("date_end") or DATE_END
+    )
+
+    defaults = _default_date_range()
+    date_start = input_start or defaults["date_start"]
+    date_end = input_end or defaults["date_end"]
+
+    return {"date_start": date_start, "date_end": date_end}
 
 
 def request_access_token() -> str:
