@@ -110,7 +110,7 @@ def _fetch_total_for_range(
     print(f"Payload for balance in Genesys Cloud")
     print(payload)
     response = requests.post(SEARCH_URL, headers=headers, json=payload)
-    if response.status_code == 429:
+    while response.status_code == 429:
         retry = int(response.headers.get("Retry-After", "1"))
         print(f"⏳ Rate limit total (429). Esperando {retry}s…")
         import time
