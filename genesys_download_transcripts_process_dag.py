@@ -18,6 +18,7 @@ S3_PREFIX = ""
 
 DATE_START = ""
 DATE_END = ""
+TEST_MODE = False
 
 MEDIA_TYPE = "any"
 PAGE_SIZE = 25
@@ -57,6 +58,16 @@ def _default_date_range() -> dict:
     }
 
 
+def _normalize_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "si", "sí"}
+    return bool(value)
+
+
 def resolve_date_range(**context) -> dict:
     dag_run = context.get("dag_run")
     conf = (dag_run.conf or {}) if dag_run else {}
@@ -67,12 +78,22 @@ def resolve_date_range(**context) -> dict:
     input_end = _normalize_input_date(
         conf.get("DATE_END") or conf.get("date_end") or DATE_END
     )
+    if "TEST_MODE" in conf or "test_mode" in conf:
+        input_test_mode = _normalize_bool(
+            conf.get("TEST_MODE") if "TEST_MODE" in conf else conf.get("test_mode")
+        )
+    else:
+        input_test_mode = None
 
     defaults = _default_date_range()
     date_start = input_start or defaults["date_start"]
     date_end = input_end or defaults["date_end"]
 
-    return {"date_start": date_start, "date_end": date_end}
+    return {
+        "date_start": date_start,
+        "date_end": date_end,
+        "test_mode": TEST_MODE if input_test_mode is None else input_test_mode,
+    }
 
 
 def request_access_token() -> str:
@@ -126,6 +147,16 @@ def _fetch_total_for_range(
 
 def build_balanced_date_ranges(**context) -> list[dict]:
     date_range = context["ti"].xcom_pull(task_ids="init.resolve_date_range")
+    if _normalize_bool((date_range or {}).get("test_mode", TEST_MODE)):
+        start_dt = _parse_datetime(date_range["date_start"])
+        end_dt = _parse_datetime(date_range["date_end"])
+        return [
+            {
+                "date_start": _format_query_dt(start_dt),
+                "date_end": _format_query_dt(end_dt),
+                "total": None,
+            }
+        ]
     token = context["ti"].xcom_pull(task_ids="01_auth.fetch_token")
 
     start_dt = _parse_datetime(date_range["date_start"])
@@ -165,8 +196,10 @@ def build_balanced_date_ranges(**context) -> list[dict]:
 
 
 def search_transcripts_available(**context) -> list[dict]:
+    runtime_config = context["ti"].xcom_pull(task_ids="init.resolve_date_range") or {}
     date_ranges = context["ti"].xcom_pull(task_ids="02_balance_ranges.balance_ranges")
     token = context["ti"].xcom_pull(task_ids="01_auth.fetch_token")
+    test_mode = _normalize_bool(runtime_config.get("test_mode", TEST_MODE))
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -178,6 +211,9 @@ def search_transcripts_available(**context) -> list[dict]:
         page_number = 1
         total = 0
         while True:
+            if test_mode and page_number > 4:
+                print("🧪 TEST_MODE activo: se limita a las primeras 4 páginas.")
+                break
             payload = {
                 "pageSize": PAGE_SIZE,
                 "pageNumber": page_number,
