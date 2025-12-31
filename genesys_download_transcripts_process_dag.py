@@ -1,4 +1,3 @@
-import os
 from datetime import timedelta
 
 import pendulum
@@ -7,12 +6,13 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.task_group import TaskGroup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 GENESYS_CLIENT_ID = "d2c69c59-c404-41b3-8da2-578934976898"
 GENESYS_CLIENT_SECRET = "82ZD784Ipuh2d_O7KJrlQzxfSLEUZ_WEgzornvnPBHI"
 GENESYS_REGION = "mypurecloud.com"
 
-OUTPUT_DIR = "/opt/airflow/dags/llcr/data/"
 S3_BUCKET = "report360-datalake-prodution"
 S3_PREFIX = ""
 
@@ -315,13 +315,35 @@ def resolve_transcript_urls(**context) -> list[dict]:
     return resolved
 
 
-def download_transcripts(**context) -> dict:
+def _build_retry_session() -> requests.Session:
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=2,
+        status_forcelist={429, 500, 502, 503, 504},
+        allowed_methods={"GET"},
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+def stream_transcripts_to_s3(**context) -> dict:
     transcripts = context["ti"].xcom_pull(
         task_ids="03_get_url_transcripts.resolve_urls"
     )
+    hook = S3Hook(aws_conn_id="aws_default")
+    s3_client = hook.get_conn()
+    prefix = S3_PREFIX.strip("/")
+    session = _build_retry_session()
     count_found = 0
-    count_saved = 0
-    saved_files = []
+    count_uploaded = 0
+    count_failed = 0
     for item in transcripts or []:
         count_found += 1
         conv_id = item["conversation_id"]
@@ -330,56 +352,28 @@ def download_transcripts(**context) -> dict:
         presigned_url = item["url"]
 
         filename = f"{conv_id}__{comm_id}__{media_type}.json"
-        dest_path = os.path.join(OUTPUT_DIR, filename)
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-
-        response = requests.get(presigned_url, timeout=120)
-        response.raise_for_status()
-        with open(dest_path, "wb") as file_handle:
-            file_handle.write(response.content)
-        count_saved += 1
-        saved_files.append(dest_path)
+        key = f"{prefix}/{filename}" if prefix else filename
+        try:
+            with session.get(presigned_url, stream=True, timeout=(10, 120)) as response:
+                response.raise_for_status()
+                response.raw.decode_content = True
+                s3_client.upload_fileobj(
+                    response.raw,
+                    S3_BUCKET,
+                    key,
+                )
+            count_uploaded += 1
+        except requests.RequestException as exc:
+            count_failed += 1
+            print(
+                "⚠️ No se pudo descargar/subir el transcript. Se continúa. "
+                f"{conv_id}/{comm_id} error={exc}"
+            )
 
     return {
         "found": count_found,
-        "saved": count_saved,
-        "output_dir": OUTPUT_DIR,
-        "saved_files": saved_files,
-    }
-
-
-def upload_transcripts_to_s3(**context) -> dict:
-    payload = context["ti"].xcom_pull(
-        task_ids="03_get_url_transcripts.download_transcripts"
-    )
-    saved_files = (payload or {}).get("saved_files", [])
-    hook = S3Hook(aws_conn_id="aws_default")
-
-    prefix = S3_PREFIX.strip("/")
-    uploaded = 0
-    skipped_missing = 0
-    for file_path in saved_files:
-        if not os.path.exists(file_path):
-            print(
-                "⚠️ Archivo no encontrado para carga en S3. Se omite y continúa: "
-                f"{file_path}"
-            )
-            skipped_missing += 1
-            continue
-        filename = os.path.basename(file_path)
-        key = f"{prefix}/{filename}" if prefix else filename
-        hook.load_file(
-            filename=file_path,
-            key=key,
-            bucket_name=S3_BUCKET,
-            replace=True,
-        )
-        os.remove(file_path)
-        uploaded += 1
-
-    return {
-        "uploaded": uploaded,
-        "skipped_missing": skipped_missing,
+        "uploaded": count_uploaded,
+        "failed": count_failed,
         "bucket": S3_BUCKET,
         "prefix": prefix,
     }
@@ -440,14 +434,10 @@ with DAG(
             python_callable=resolve_transcript_urls,
         )
         download_transcripts_task = PythonOperator(
-            task_id="download_transcripts",
-            python_callable=download_transcripts,
-        )
-        upload_transcripts_task = PythonOperator(
-            task_id="upload_transcripts",
-            python_callable=upload_transcripts_to_s3,
+            task_id="stream_transcripts_to_s3",
+            python_callable=stream_transcripts_to_s3,
         )
 
-        resolve_urls_task >> download_transcripts_task >> upload_transcripts_task
+        resolve_urls_task >> download_transcripts_task
 
     init_group >> auth_group >> balance_group >> search_group >> download_group
