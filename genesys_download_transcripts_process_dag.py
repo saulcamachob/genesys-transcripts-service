@@ -3,6 +3,7 @@ from datetime import timedelta
 import pendulum
 import requests
 from airflow import DAG
+from airflow.decorators import task
 from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.task_group import TaskGroup
@@ -287,6 +288,7 @@ def resolve_transcript_urls(**context) -> list[dict]:
     )
 
     headers = {"Authorization": f"Bearer {token}"}
+    session = _build_retry_session()
     resolved = []
     for item in transcripts or []:
         conv_id = item["conversation_id"]
@@ -295,14 +297,7 @@ def resolve_transcript_urls(**context) -> list[dict]:
             f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
             f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
         )
-        response = requests.get(url, headers=headers)
-        if response.status_code == 429:
-            retry = int(response.headers.get("Retry-After", "1"))
-            print(f"⏳ Rate limit URL (429). Esperando {retry}s…")
-            import time
-
-            time.sleep(retry)
-            response = requests.get(url, headers=headers)
+        response = session.get(url, headers=headers, timeout=(10, 30))
         if response.status_code == 404:
             print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
             continue
@@ -333,10 +328,18 @@ def _build_retry_session() -> requests.Session:
     return session
 
 
-def stream_transcripts_to_s3(**context) -> dict:
-    transcripts = context["ti"].xcom_pull(
-        task_ids="03_get_url_transcripts.resolve_urls"
-    )
+@task
+def chunk_transcripts(transcripts: list[dict], batch_size: int = 300) -> list[list[dict]]:
+    if not transcripts:
+        return []
+    return [
+        transcripts[index : index + batch_size]
+        for index in range(0, len(transcripts), batch_size)
+    ]
+
+
+@task
+def stream_transcripts_batch_to_s3(transcripts_batch: list[dict]) -> dict:
     hook = S3Hook(aws_conn_id="aws_default")
     s3_client = hook.get_conn()
     prefix = S3_PREFIX.strip("/")
@@ -344,7 +347,7 @@ def stream_transcripts_to_s3(**context) -> dict:
     count_found = 0
     count_uploaded = 0
     count_failed = 0
-    for item in transcripts or []:
+    for item in transcripts_batch or []:
         count_found += 1
         conv_id = item["conversation_id"]
         comm_id = item["communication_id"]
@@ -433,11 +436,14 @@ with DAG(
             task_id="resolve_urls",
             python_callable=resolve_transcript_urls,
         )
-        download_transcripts_task = PythonOperator(
-            task_id="stream_transcripts_to_s3",
-            python_callable=stream_transcripts_to_s3,
+        chunk_transcripts_task = chunk_transcripts(
+            resolve_urls_task.output,
+            batch_size=300,
+        )
+        stream_transcripts_task = stream_transcripts_batch_to_s3.expand(
+            transcripts_batch=chunk_transcripts_task,
         )
 
-        resolve_urls_task >> download_transcripts_task
+        resolve_urls_task >> chunk_transcripts_task >> stream_transcripts_task
 
     init_group >> auth_group >> balance_group >> search_group >> download_group
