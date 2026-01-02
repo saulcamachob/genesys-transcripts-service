@@ -354,6 +354,30 @@ def _resolve_transcript_url(item: dict, token: str) -> dict | None:
     return {**item, "url": transcript_url}
 
 
+def _resolve_transcript_url(
+    item: dict, token: str, session: requests.Session | None = None
+) -> dict | None:
+    if session is None:
+        session = _build_retry_session()
+    conv_id = item["conversation_id"]
+    comm_id = item["communication_id"]
+    url = (
+        f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
+        f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    response = session.get(url, headers=headers, timeout=(10, 30))
+    if response.status_code == 404:
+        print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
+        return None
+    response.raise_for_status()
+    payload = response.json() or {}
+    transcript_url = payload.get("url")
+    if not transcript_url:
+        return None
+    return {**item, "url": transcript_url}
+
+
 @task
 def chunk_transcripts(transcripts: list[dict], batch_size: int = 300) -> list[list[dict]]:
     if not transcripts:
