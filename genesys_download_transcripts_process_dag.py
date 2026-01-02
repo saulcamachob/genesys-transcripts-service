@@ -1,4 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+import os
+import threading
 
 import pendulum
 import requests
@@ -309,6 +312,37 @@ def _resolve_transcript_url(
     )
     headers = {"Authorization": f"Bearer {token}"}
     response = session.get(url, headers=headers, timeout=(10, 30))
+    if response.status_code == 404:
+        print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
+        return None
+    response.raise_for_status()
+    payload = response.json() or {}
+    transcript_url = payload.get("url")
+    if not transcript_url:
+        return None
+    return {**item, "url": transcript_url}
+
+
+_thread_local = threading.local()
+
+
+def _thread_session() -> requests.Session:
+    session = getattr(_thread_local, "session", None)
+    if session is None:
+        session = _build_retry_session()
+        _thread_local.session = session
+    return session
+
+
+def _resolve_transcript_url(item: dict, token: str) -> dict | None:
+    conv_id = item["conversation_id"]
+    comm_id = item["communication_id"]
+    url = (
+        f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
+        f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    response = _thread_session().get(url, headers=headers, timeout=(10, 30))
     if response.status_code == 404:
         print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
         return None
