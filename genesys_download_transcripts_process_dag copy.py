@@ -1,18 +1,19 @@
-import os
 from datetime import timedelta
 
 import pendulum
 import requests
 from airflow import DAG
+from airflow.decorators import task
 from airflow.operators.python import PythonOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.task_group import TaskGroup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 GENESYS_CLIENT_ID = "d2c69c59-c404-41b3-8da2-578934976898"
 GENESYS_CLIENT_SECRET = "82ZD784Ipuh2d_O7KJrlQzxfSLEUZ_WEgzornvnPBHI"
 GENESYS_REGION = "mypurecloud.com"
 
-OUTPUT_DIR = "/opt/airflow/dags/llcr/data/"
 S3_BUCKET = "report360-datalake-prodution"
 S3_PREFIX = ""
 
@@ -280,106 +281,100 @@ def search_transcripts_available(**context) -> list[dict]:
     return results
 
 
-def resolve_transcript_urls(**context) -> list[dict]:
-    token = context["ti"].xcom_pull(task_ids="01_auth.fetch_token")
-    transcripts = context["ti"].xcom_pull(
-        task_ids="02_get_data_available.search_transcripts"
+def _build_retry_session() -> requests.Session:
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=2,
+        status_forcelist={429, 500, 502, 503, 504},
+        allowed_methods={"GET"},
+        respect_retry_after_header=True,
+        raise_on_status=False,
     )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
+def _resolve_transcript_url(
+    item: dict, token: str, session: requests.Session
+) -> dict | None:
+    conv_id = item["conversation_id"]
+    comm_id = item["communication_id"]
+    url = (
+        f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
+        f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
+    )
     headers = {"Authorization": f"Bearer {token}"}
-    resolved = []
-    for item in transcripts or []:
-        conv_id = item["conversation_id"]
-        comm_id = item["communication_id"]
-        url = (
-            f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
-            f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
-        )
-        response = requests.get(url, headers=headers)
-        if response.status_code == 429:
-            retry = int(response.headers.get("Retry-After", "1"))
-            print(f"⏳ Rate limit URL (429). Esperando {retry}s…")
-            import time
-
-            time.sleep(retry)
-            response = requests.get(url, headers=headers)
-        if response.status_code == 404:
-            print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
-            continue
-        response.raise_for_status()
-        payload = response.json() or {}
-        transcript_url = payload.get("url")
-        if transcript_url:
-            resolved.append({**item, "url": transcript_url})
-
-    return resolved
+    response = session.get(url, headers=headers, timeout=(10, 30))
+    if response.status_code == 404:
+        print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
+        return None
+    response.raise_for_status()
+    payload = response.json() or {}
+    transcript_url = payload.get("url")
+    if not transcript_url:
+        return None
+    return {**item, "url": transcript_url}
 
 
-def download_transcripts(**context) -> dict:
-    transcripts = context["ti"].xcom_pull(
-        task_ids="03_get_url_transcripts.resolve_urls"
-    )
+@task
+def chunk_transcripts(transcripts: list[dict], batch_size: int = 300) -> list[list[dict]]:
+    if not transcripts:
+        return []
+    return [
+        transcripts[index : index + batch_size]
+        for index in range(0, len(transcripts), batch_size)
+    ]
+
+
+@task
+def resolve_and_stream_batch_to_s3(transcripts_batch: list[dict], token: str) -> dict:
+    hook = S3Hook(aws_conn_id="aws_default")
+    s3_client = hook.get_conn()
+    prefix = S3_PREFIX.strip("/")
+    session = _build_retry_session()
     count_found = 0
-    count_saved = 0
-    saved_files = []
-    for item in transcripts or []:
+    count_resolved = 0
+    count_uploaded = 0
+    count_failed = 0
+    for item in transcripts_batch or []:
         count_found += 1
-        conv_id = item["conversation_id"]
-        comm_id = item["communication_id"]
-        media_type = item["media_type"]
-        presigned_url = item["url"]
+        resolved_item = _resolve_transcript_url(item, token, session)
+        if not resolved_item:
+            continue
+        count_resolved += 1
+        conv_id = resolved_item["conversation_id"]
+        comm_id = resolved_item["communication_id"]
+        media_type = resolved_item["media_type"]
+        presigned_url = resolved_item["url"]
 
         filename = f"{conv_id}__{comm_id}__{media_type}.json"
-        dest_path = os.path.join(OUTPUT_DIR, filename)
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-
-        response = requests.get(presigned_url, timeout=120)
-        response.raise_for_status()
-        with open(dest_path, "wb") as file_handle:
-            file_handle.write(response.content)
-        count_saved += 1
-        saved_files.append(dest_path)
+        key = f"{prefix}/{filename}" if prefix else filename
+        try:
+            with session.get(presigned_url, stream=True, timeout=(10, 120)) as response:
+                response.raise_for_status()
+                response.raw.decode_content = True
+                s3_client.upload_fileobj(
+                    response.raw,
+                    S3_BUCKET,
+                    key,
+                )
+            count_uploaded += 1
+        except requests.RequestException as exc:
+            count_failed += 1
+            print(
+                "⚠️ No se pudo descargar/subir el transcript. Se continúa. "
+                f"{conv_id}/{comm_id} error={exc}"
+            )
 
     return {
         "found": count_found,
-        "saved": count_saved,
-        "output_dir": OUTPUT_DIR,
-        "saved_files": saved_files,
-    }
-
-
-def upload_transcripts_to_s3(**context) -> dict:
-    payload = context["ti"].xcom_pull(
-        task_ids="03_get_url_transcripts.download_transcripts"
-    )
-    saved_files = (payload or {}).get("saved_files", [])
-    hook = S3Hook(aws_conn_id="aws_default")
-
-    prefix = S3_PREFIX.strip("/")
-    uploaded = 0
-    skipped_missing = 0
-    for file_path in saved_files:
-        if not os.path.exists(file_path):
-            print(
-                "⚠️ Archivo no encontrado para carga en S3. Se omite y continúa: "
-                f"{file_path}"
-            )
-            skipped_missing += 1
-            continue
-        filename = os.path.basename(file_path)
-        key = f"{prefix}/{filename}" if prefix else filename
-        hook.load_file(
-            filename=file_path,
-            key=key,
-            bucket_name=S3_BUCKET,
-            replace=True,
-        )
-        os.remove(file_path)
-        uploaded += 1
-
-    return {
-        "uploaded": uploaded,
-        "skipped_missing": skipped_missing,
+        "resolved": count_resolved,
+        "uploaded": count_uploaded,
+        "failed": count_failed,
         "bucket": S3_BUCKET,
         "prefix": prefix,
     }
@@ -435,19 +430,16 @@ with DAG(
         group_id="03_get_url_transcripts",
         tooltip="Resolución de URLs y descarga de transcripciones",
     ) as download_group:
-        resolve_urls_task = PythonOperator(
-            task_id="resolve_urls",
-            python_callable=resolve_transcript_urls,
+        chunk_transcripts_task = chunk_transcripts(
+            search_transcripts_task.output,
+            batch_size=300,
         )
-        download_transcripts_task = PythonOperator(
-            task_id="download_transcripts",
-            python_callable=download_transcripts,
-        )
-        upload_transcripts_task = PythonOperator(
-            task_id="upload_transcripts",
-            python_callable=upload_transcripts_to_s3,
+        stream_transcripts_task = resolve_and_stream_batch_to_s3.partial(
+            token=fetch_token_task.output,
+        ).expand(
+            transcripts_batch=chunk_transcripts_task,
         )
 
-        resolve_urls_task >> download_transcripts_task >> upload_transcripts_task
+        chunk_transcripts_task >> stream_transcripts_task
 
     init_group >> auth_group >> balance_group >> search_group >> download_group
