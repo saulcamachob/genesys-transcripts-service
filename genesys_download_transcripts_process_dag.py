@@ -1,4 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+import os
+import threading
 
 import pendulum
 import requests
@@ -286,26 +289,21 @@ def resolve_transcript_urls(**context) -> list[dict]:
     transcripts = context["ti"].xcom_pull(
         task_ids="02_get_data_available.search_transcripts"
     )
-
-    headers = {"Authorization": f"Bearer {token}"}
-    session = _build_retry_session()
     resolved = []
-    for item in transcripts or []:
-        conv_id = item["conversation_id"]
-        comm_id = item["communication_id"]
-        url = (
-            f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
-            f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
-        )
-        response = session.get(url, headers=headers, timeout=(10, 30))
-        if response.status_code == 404:
-            print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
-            continue
-        response.raise_for_status()
-        payload = response.json() or {}
-        transcript_url = payload.get("url")
-        if transcript_url:
-            resolved.append({**item, "url": transcript_url})
+    if not transcripts:
+        return resolved
+
+    max_workers = int(os.getenv("RESOLVE_URLS_MAX_WORKERS", "12"))
+    log_every = int(os.getenv("RESOLVE_URLS_LOG_EVERY", "500"))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for index, result in enumerate(
+            executor.map(lambda item: _resolve_transcript_url(item, token), transcripts),
+            start=1,
+        ):
+            if result:
+                resolved.append(result)
+            if log_every and index % log_every == 0:
+                print(f"🔎 URLs resueltas: {index}/{len(transcripts)}")
 
     return resolved
 
@@ -326,6 +324,37 @@ def _build_retry_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
+
+
+_thread_local = threading.local()
+
+
+def _thread_session() -> requests.Session:
+    session = getattr(_thread_local, "session", None)
+    if session is None:
+        session = _build_retry_session()
+        _thread_local.session = session
+    return session
+
+
+def _resolve_transcript_url(item: dict, token: str) -> dict | None:
+    conv_id = item["conversation_id"]
+    comm_id = item["communication_id"]
+    url = (
+        f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
+        f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    response = _thread_session().get(url, headers=headers, timeout=(10, 30))
+    if response.status_code == 404:
+        print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
+        return None
+    response.raise_for_status()
+    payload = response.json() or {}
+    transcript_url = payload.get("url")
+    if not transcript_url:
+        return None
+    return {**item, "url": transcript_url}
 
 
 @task
