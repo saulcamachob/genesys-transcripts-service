@@ -215,7 +215,7 @@ def search_transcripts_available(**context) -> list[dict]:
         page_number = 1
         total = 0
         while True:
-            if test_mode and page_number > 4:
+            if test_mode and page_number > 10:
                 print("🧪 TEST_MODE activo: se limita a las primeras 4 páginas.")
                 break
             payload = {
