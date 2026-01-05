@@ -72,6 +72,26 @@ def _normalize_bool(value: object) -> bool:
     return bool(value)
 
 
+def _conversation_start_date(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, pendulum.DateTime):
+        dt_value = value
+    elif isinstance(value, (int, float)):
+        dt_value = pendulum.from_timestamp(value / 1000, tz="UTC")
+    elif isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if trimmed.isdigit():
+            dt_value = pendulum.from_timestamp(int(trimmed) / 1000, tz="UTC")
+        else:
+            dt_value = pendulum.parse(trimmed, tz="UTC")
+    else:
+        return None
+    return dt_value.format("YYYY-MM-DD")
+
+
 def resolve_date_range(**context) -> dict:
     dag_run = context.get("dag_run")
     conf = (dag_run.conf or {}) if dag_run else {}
@@ -90,8 +110,12 @@ def resolve_date_range(**context) -> dict:
         input_test_mode = None
 
     defaults = _default_date_range()
-    date_start = input_start or defaults["date_start"]
-    date_end = input_end or defaults["date_end"]
+    date_start = input_start or defaults.get("date_start")
+    date_end = input_end or defaults.get("date_end")
+    if not date_start or not date_end:
+        defaults = _default_date_range()
+        date_start = date_start or defaults["date_start"]
+        date_end = date_end or defaults["date_end"]
 
     return {
         "date_start": date_start,
@@ -266,12 +290,14 @@ def search_transcripts_available(**context) -> list[dict]:
                 conv_id = item.get("conversationId")
                 comm_id = item.get("communicationId")
                 media_type = (item.get("mediaType") or MEDIA_TYPE or "unknown").upper()
+                conversation_start_time = item.get("conversationStartTime")
                 if conv_id and comm_id:
                     results.append(
                         {
                             "conversation_id": conv_id,
                             "communication_id": comm_id,
                             "media_type": media_type,
+                            "conversation_start_time": conversation_start_time,
                         }
                     )
 
@@ -408,9 +434,15 @@ def resolve_and_stream_batch_to_s3(transcripts_batch: list[dict], token: str) ->
         comm_id = resolved_item["communication_id"]
         media_type = resolved_item["media_type"]
         presigned_url = resolved_item["url"]
+        conversation_start_time = resolved_item.get("conversation_start_time")
 
         filename = f"{conv_id}__{comm_id}__{media_type}.json"
-        key = f"{prefix}/{filename}" if prefix else filename
+        folder_date = _conversation_start_date(conversation_start_time) or "unknown-date"
+        base_prefix = "transcritps"
+        full_prefix = "/".join(
+            part for part in (prefix, base_prefix, folder_date) if part
+        )
+        key = f"{full_prefix}/{filename}" if full_prefix else filename
         try:
             with session.get(presigned_url, stream=True, timeout=(10, 120)) as response:
                 response.raise_for_status()
