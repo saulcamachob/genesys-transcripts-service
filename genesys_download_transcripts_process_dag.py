@@ -110,8 +110,12 @@ def resolve_date_range(**context) -> dict:
         input_test_mode = None
 
     defaults = _default_date_range()
-    date_start = input_start or defaults["ct"]
-    date_end = input_end or defaults["date_end"]
+    date_start = input_start or defaults.get("date_start")
+    date_end = input_end or defaults.get("date_end")
+    if not date_start or not date_end:
+        defaults = _default_date_range()
+        date_start = date_start or defaults["date_start"]
+        date_end = date_end or defaults["date_end"]
 
     return {
         "date_start": date_start,
