@@ -8,7 +8,7 @@ import pendulum
 import requests
 from airflow import DAG
 from airflow.decorators import task
-from airflow.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator, get_current_context
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.task_group import TaskGroup
 from requests.adapters import HTTPAdapter
@@ -94,6 +94,11 @@ def _conversation_start_date(value: object) -> str | None:
 
 
 def resolve_date_range(**context) -> dict:
+    if not context:
+        try:
+            context = get_current_context()
+        except Exception:
+            context = {}
     dag_run = context.get("dag_run")
     conf = (dag_run.conf or {}) if dag_run else {}
     if isinstance(conf, str):
@@ -183,6 +188,11 @@ def _fetch_total_for_range(
 
 
 def build_balanced_date_ranges(**context) -> list[dict]:
+    if not context:
+        try:
+            context = get_current_context()
+        except Exception:
+            context = {}
     date_range = context["ti"].xcom_pull(task_ids="init.resolve_date_range")
     if _normalize_bool((date_range or {}).get("test_mode", TEST_MODE)):
         start_dt = _parse_datetime(date_range["date_start"])
@@ -233,6 +243,11 @@ def build_balanced_date_ranges(**context) -> list[dict]:
 
 
 def search_transcripts_available(**context) -> list[dict]:
+    if not context:
+        try:
+            context = get_current_context()
+        except Exception:
+            context = {}
     runtime_config = context["ti"].xcom_pull(task_ids="init.resolve_date_range") or {}
     date_ranges = context["ti"].xcom_pull(task_ids="02_balance_ranges.balance_ranges")
     token = context["ti"].xcom_pull(task_ids="01_auth.fetch_token")
