@@ -8,15 +8,18 @@ import pendulum
 import requests
 from airflow import DAG
 from airflow.decorators import task
+from airflow.hooks.base import BaseHook
 from airflow.operators.python import PythonOperator, get_current_context
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.utils.task_group import TaskGroup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-GENESYS_CLIENT_ID = "d5529645-9fa7-4925-8b50-a52d4689f5b7"
-GENESYS_CLIENT_SECRET = "araOa2Q9VYa6HfZLb9WZKwTjaJtDUzfeOimcHsu3vaU"
-GENESYS_REGION = "mypurecloud.com"
+connection_genesys = BaseHook.get_connection("llcr_genesys_transcr")
+GENESYS_CLIENT_ID = connection_genesys.login
+GENESYS_CLIENT_SECRET = connection_genesys.password
+GENESYS_REGION = connection_genesys.host
+GENESYS_EXTRAS = connection_genesys.extras
 
 S3_BUCKET = "report360-datalake-prodution"
 S3_PREFIX = ""
