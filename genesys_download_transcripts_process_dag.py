@@ -121,7 +121,7 @@ def _fetch_total_for_range(
         "pageSize": PAGE_SIZE,
         "pageNumber": 1,
         "types": ["transcripts"],
-        "returnFields": ["conversationId", "communicationId", "mediaType"],
+        "returnFields": ["conversationId", "communicationId", "mediaType","conversationStartTime"],
         "query": [
             {
                 "type": "DATE_RANGE",
@@ -222,7 +222,7 @@ def search_transcripts_available(**context) -> list[dict]:
                 "pageSize": PAGE_SIZE,
                 "pageNumber": page_number,
                 "types": ["transcripts"],
-                "returnFields": ["conversationId", "communicationId", "mediaType"],
+                "returnFields": ["conversationId", "communicationId", "mediaType","conversationStartTime"],
                 "query": [
                     {
                         "type": "DATE_RANGE",
