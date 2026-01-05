@@ -13,8 +13,8 @@ from airflow.utils.task_group import TaskGroup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-GENESYS_CLIENT_ID = "d2c69c59-c404-41b3-8da2-578934976898"
-GENESYS_CLIENT_SECRET = "82ZD784Ipuh2d_O7KJrlQzxfSLEUZ_WEgzornvnPBHI"
+GENESYS_CLIENT_ID = "d5529645-9fa7-4925-8b50-a52d4689f5b7"
+GENESYS_CLIENT_SECRET = "araOa2Q9VYa6HfZLb9WZKwTjaJtDUzfeOimcHsu3vaU"
 GENESYS_REGION = "mypurecloud.com"
 
 S3_BUCKET = "report360-datalake-prodution"
@@ -97,7 +97,7 @@ def resolve_date_range(**context) -> dict:
     conf = (dag_run.conf or {}) if dag_run else {}
 
     input_start = _normalize_input_date(
-        conf.get("DATE_START") or conf.get("date_start") or DATE_START
+        conf.get("DATE_START") or conf.get("c") or DATE_START
     )
     input_end = _normalize_input_date(
         conf.get("DATE_END") or conf.get("date_end") or DATE_END
