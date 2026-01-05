@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+import json
 import os
 import threading
 
@@ -95,16 +96,24 @@ def _conversation_start_date(value: object) -> str | None:
 def resolve_date_range(**context) -> dict:
     dag_run = context.get("dag_run")
     conf = (dag_run.conf or {}) if dag_run else {}
+    if isinstance(conf, str):
+        try:
+            conf = json.loads(conf)
+        except json.JSONDecodeError:
+            conf = {}
+    if not isinstance(conf, dict):
+        conf = {}
+    normalized_conf = {str(key).strip().lower(): value for key, value in conf.items()}
 
     input_start = _normalize_input_date(
-        conf.get("DATE_START") or conf.get("c") or DATE_START
+        normalized_conf.get("date_start") or DATE_START
     )
     input_end = _normalize_input_date(
-        conf.get("DATE_END") or conf.get("date_end") or DATE_END
+        normalized_conf.get("date_end") or DATE_END
     )
-    if "TEST_MODE" in conf or "test_mode" in conf:
+    if "test_mode" in normalized_conf:
         input_test_mode = _normalize_bool(
-            conf.get("TEST_MODE") if "TEST_MODE" in conf else conf.get("test_mode")
+            normalized_conf.get("test_mode")
         )
     else:
         input_test_mode = None
