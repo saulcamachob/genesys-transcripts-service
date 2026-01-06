@@ -18,8 +18,8 @@ from urllib3.util.retry import Retry
 connection_genesys = BaseHook.get_connection("llcr_genesys_transcr")
 GENESYS_CLIENT_ID = connection_genesys.login
 GENESYS_CLIENT_SECRET = connection_genesys.password
-GENESYS_REGION = connection_genesys.host
-GENESYS_EXTRAS = connection_genesys.extras
+GENESYS_REGION = connection_genesys.description
+GENESYS_EXTRAS = connection_genesys.extra
 
 S3_BUCKET = "report360-datalake-prodution"
 S3_PREFIX = ""
