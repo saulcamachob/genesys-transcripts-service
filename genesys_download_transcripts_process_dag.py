@@ -508,8 +508,8 @@ with DAG(
     dag_id="genesys_download_transcripts_process",
     description="DAG unificado para descargar transcripciones desde Genesys",
     default_args=default_args,
-    start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
-    schedule=None,
+    start_date=pendulum.datetime(2024, 1, 1, tz="America/Puerto_Rico"),
+    schedule="0 3 * * *",
     catchup=False,
     tags=["genesys", "transcripts"],
 ):
