@@ -1,8 +1,8 @@
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import json
 import os
-import threading
+import random
+import time
 
 import pendulum
 import requests
@@ -31,6 +31,8 @@ TEST_MODE = True
 MEDIA_TYPE = "any"
 PAGE_SIZE = 100
 MAX_TOTAL_RESULTS = 1000
+MAX_RETRY_AFTER_SECONDS = 30
+MAX_TRANSCRIPT_URL_ATTEMPTS = 4
 
 SEARCH_URL = f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/transcripts/search"
 
@@ -343,9 +345,9 @@ def _build_retry_session() -> requests.Session:
         connect=5,
         read=5,
         backoff_factor=2,
-        status_forcelist={429, 500, 502, 503, 504},
+        status_forcelist={500, 502, 503, 504},
         allowed_methods={"GET"},
-        respect_retry_after_header=True,
+        respect_retry_after_header=False,
         raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retry)
@@ -353,59 +355,6 @@ def _build_retry_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
-
-def _resolve_transcript_url(
-    item: dict, token: str, session: requests.Session
-) -> dict | None:
-    conv_id = item["conversation_id"]
-    comm_id = item["communication_id"]
-    url = (
-        f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
-        f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
-    )
-    headers = {"Authorization": f"Bearer {token}"}
-    response = session.get(url, headers=headers, timeout=(10, 30))
-    if response.status_code == 404:
-        print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
-        return None
-    response.raise_for_status()
-    payload = response.json() or {}
-    transcript_url = payload.get("url")
-    if not transcript_url:
-        return None
-    return {**item, "url": transcript_url}
-
-
-_thread_local = threading.local()
-
-
-def _thread_session() -> requests.Session:
-    session = getattr(_thread_local, "session", None)
-    if session is None:
-        session = _build_retry_session()
-        _thread_local.session = session
-    return session
-
-
-def _resolve_transcript_url(item: dict, token: str) -> dict | None:
-    conv_id = item["conversation_id"]
-    comm_id = item["communication_id"]
-    url = (
-        f"https://api.{GENESYS_REGION}/api/v2/speechandtextanalytics/"
-        f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
-    )
-    headers = {"Authorization": f"Bearer {token}"}
-    response = _thread_session().get(url, headers=headers, timeout=(10, 30))
-    if response.status_code == 404:
-        print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
-        return None
-    response.raise_for_status()
-    payload = response.json() or {}
-    transcript_url = payload.get("url")
-    if not transcript_url:
-        return None
-    return {**item, "url": transcript_url}
-
 
 def _resolve_transcript_url(
     item: dict, token: str, session: requests.Session | None = None
@@ -419,16 +368,33 @@ def _resolve_transcript_url(
         f"conversations/{conv_id}/communications/{comm_id}/transcripturl"
     )
     headers = {"Authorization": f"Bearer {token}"}
-    response = session.get(url, headers=headers, timeout=(10, 30))
-    if response.status_code == 404:
-        print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
-        return None
-    response.raise_for_status()
-    payload = response.json() or {}
-    transcript_url = payload.get("url")
-    if not transcript_url:
-        return None
-    return {**item, "url": transcript_url}
+    for attempt in range(1, MAX_TRANSCRIPT_URL_ATTEMPTS + 1):
+        response = session.get(url, headers=headers, timeout=(10, 30))
+        if response.status_code == 404:
+            print(f"⚠️ No hay transcriptURL para {conv_id}/{comm_id}")
+            return None
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", "1"))
+            sleep_seconds = min(retry_after, MAX_RETRY_AFTER_SECONDS)
+            jitter = random.uniform(0, 1)
+            print(
+                "⏳ Rate limit (429) al resolver transcriptURL para "
+                f"{conv_id}/{comm_id}. Intento {attempt}/"
+                f"{MAX_TRANSCRIPT_URL_ATTEMPTS}. Esperando {sleep_seconds:.1f}s."
+            )
+            time.sleep(sleep_seconds + jitter)
+            continue
+        response.raise_for_status()
+        payload = response.json() or {}
+        transcript_url = payload.get("url")
+        if not transcript_url:
+            return None
+        return {**item, "url": transcript_url}
+    print(
+        "⚠️ Se agotaron los reintentos para resolver transcriptURL "
+        f"{conv_id}/{comm_id}."
+    )
+    return None
 
 
 @task
@@ -453,7 +419,17 @@ def resolve_and_stream_batch_to_s3(transcripts_batch: list[dict], token: str) ->
     count_failed = 0
     for item in transcripts_batch or []:
         count_found += 1
-        resolved_item = _resolve_transcript_url(item, token, session)
+        try:
+            resolved_item = _resolve_transcript_url(item, token, session)
+        except requests.RequestException as exc:
+            count_failed += 1
+            conv_id = item.get("conversation_id")
+            comm_id = item.get("communication_id")
+            print(
+                "⚠️ Error al resolver transcriptURL. Se continúa. "
+                f"{conv_id}/{comm_id} error={exc}"
+            )
+            continue
         if not resolved_item:
             continue
         count_resolved += 1
