@@ -439,12 +439,13 @@ def resolve_and_stream_batch_to_s3(transcripts_batch: list[dict], token: str) ->
         presigned_url = resolved_item["url"]
         conversation_start_time = resolved_item.get("conversation_start_time")
 
-        filename = f"{conv_id}__{comm_id}__{media_type}.json"
+        filename_actual = f"{conv_id}__{comm_id}__{media_type}.json"
         folder_date = _conversation_start_date(conversation_start_time) or "unknown-date"
-        base_prefix = "transcritps"
+        base_prefix = "transcripts"
         full_prefix = "/".join(
-            part for part in (prefix, base_prefix, folder_date) if part
+            part for part in (prefix, folder_date, base_prefix) if part
         )
+        filename = f"genesys_transcript_id_{filename_actual}"
         key = f"{full_prefix}/{filename}" if full_prefix else filename
         try:
             with session.get(presigned_url, stream=True, timeout=(10, 120)) as response:
