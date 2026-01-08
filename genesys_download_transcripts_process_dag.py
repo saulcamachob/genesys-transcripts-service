@@ -407,7 +407,7 @@ def chunk_transcripts(transcripts: list[dict], batch_size: int = 300) -> list[li
     ]
 
 
-@task
+@task(pool="s3_pool_5")  # 👈 Limita a 5 ejecuciones simultáneas
 def resolve_and_stream_batch_to_s3(transcripts_batch: list[dict], token: str) -> dict:
     hook = S3Hook(aws_conn_id="aws_default")
     s3_client = hook.get_conn()
